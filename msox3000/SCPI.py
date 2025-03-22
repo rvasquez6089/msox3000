@@ -87,7 +87,7 @@ class SCPI(object):
         # Keysight recommends using clear()
         #
         # NOTE: must use pyvisa-py >= 0.5.0 to get this implementation
-        self._inst.clear()
+        # self._inst.clear()
 
         # Read software version number so can deviate operation based
         # on changes to commands over history (WHY did they make changes?)
@@ -97,6 +97,8 @@ class SCPI(object):
         # Also, send a *CLS system command to clear the command
         # handler (error queues and such)
         self.clear()
+        self._inst
+
 
         
     def close(self):
@@ -262,7 +264,7 @@ class SCPI(object):
             queryStr = self._prefix + queryStr
         #print("QUERYIEEEBlock:",queryStr)
         try:
-            result = self._inst.query_binary_values(queryStr, datatype='s', container=bytes)
+            result = self._inst.query_binary_values(queryStr, datatype='h', container=bytes)
         except visa.VisaIOError as err:
             # Got VISA exception so read and report any errors
             self.checkInstErrors(queryStr)

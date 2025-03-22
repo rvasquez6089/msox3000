@@ -45,11 +45,12 @@ from __future__ import print_function
 
 import os
 import random
+import pyvisa as visa
 import sys
 from time import sleep
 
 # Set to the IP address of the oscilloscope
-agilent_msox_3034a = os.environ.get('MSOX3000_IP', 'TCPIP0::172.16.2.13::INSTR')
+# agilent_msox_3034a = os.environ.get('MSOX3000_IP', 'TCPIP0::172.16.2.13::INSTR')
 
 import argparse
 parser = argparse.ArgumentParser(description='Get a screen capture from Agilent/KeySight MSO3034A scope and save it to a file')
@@ -57,7 +58,7 @@ parser.add_argument('ofile', nargs=1, help='Output file name')
 args = parser.parse_args()
 
 fn_ext = ".png"
-pn = os.environ['HOME'] + "/Downloads"
+pn = "/Downloads"
 fn = pn + "/" + args.ofile[0]
 
 while os.path.isfile(fn + fn_ext):
@@ -66,19 +67,22 @@ while os.path.isfile(fn + fn_ext):
 fn += fn_ext
 
 from msox3000 import MSOX3000
+rm = visa.ResourceManager('@py')
+resources = rm.list_resources()
+print(resources)
 
 ## Connect to the Power Supply with default wait time of 100ms
-scope = MSOX3000(agilent_msox_3034a)
+scope = MSOX3000(resources[0])
 scope.open()
 
 print(scope.idn())
 
-print("Output file: %s" % fn )
-scope.hardcopy(fn)
-scope.waveform(fn+"_1.csv", '1')
-scope.waveform(fn+"_2.csv", '2')
-scope.waveform(fn+"_3.csv", '3')
-scope.waveform(fn+"_4.csv", '4')
+# print("Output file: %s" % fn )
+# scope.hardcopy(fn)
+# scope.waveform(fn+"_1.csv", '1')
+# scope.waveform(fn+"_2.csv", '2')
+# scope.waveform(fn+"_3.csv", '3')
+# scope.waveform(fn+"_4.csv", '4')
 
 chan = '1'
 print("Ch.{}: {}V ACRMS".format(chan,scope.measureDVMacrms(chan)))
@@ -86,13 +90,13 @@ print("Ch.{}: {}V DC".format(chan,scope.measureDVMdc(chan)))
 print("Ch.{}: {}V DCRMS".format(chan,scope.measureDVMdcrms(chan)))
 print("Ch.{}: {}Hz FREQ".format(chan,scope.measureDVMfreq(chan)))
 
-scope.setupSave(fn+".stp")
-
-scope.setupAutoscale('1')
-scope.setupAutoscale('2')
-scope.setupAutoscale('3')
-
-scope.setupLoad(fn+".stp")
+# scope.setupSave(fn+".stp")
+#
+# scope.setupAutoscale('1')
+# scope.setupAutoscale('2')
+# scope.setupAutoscale('3')
+#
+# scope.setupLoad(fn+".stp")
 
 if True:
     wait = 0.5 # just so can see if happen
@@ -136,49 +140,12 @@ if True:
 chan = '3'
 if (not scope.isOutputOn(chan)):
     scope.outputOn(chan)    
-print(scope.measureVoltAmplitude('1',install=False))
-print(scope.measureVoltMax('1',install=False))
-print(scope.measureVoltAmplitude('2'))
+print(scope.measureVoltAmplitude('1',install=True))
+print(scope.measureVoltMax('1',install=True))
 print(scope.measureVoltMax(install=False))
 
-scope.measureStatistics()
-
-if True:
-    print(scope.measureBitRate('4'))
-    print(scope.measureBurstWidth('4'))
-    print(scope.measureCounterFrequency('4'))
-    print(scope.measureFrequency('4'))
-    print(scope.measurePeriod('4'))
-    print(scope.measurePosDutyCycle('4'))
-    print(scope.measureNegDutyCycle('4'))
-    print(scope.measureFallTime('4'))
-    print(scope.measureFallEdgeCount('4'))
-    print(scope.measureFallPulseCount('4'))
-    print(scope.measureNegPulseWidth('4'))
-    print(scope.measurePosPulseWidth('4'))
-    print(scope.measureRiseTime('4'))
-    print(scope.measureRiseEdgeCount('4'))
-    print(scope.measureRisePulseCount('4'))
-    print(scope.measureOvershoot('4'))
-    print(scope.measurePreshoot('4'))
-    print()
-    print(scope.measureVoltAmplitude('1'))
-    print(scope.measureVoltAmplitude('4'))
-    print(scope.measureVoltTop('1'))
-    print(scope.measureVoltTop('4'))
-    print(scope.measureVoltBase('1'))
-    print(scope.measureVoltBase('4'))
-    print(scope.measureVoltMax('1'))
-    print(scope.measureVoltMax('4'))
-    print(scope.measureVoltAverage('1'))
-    print(scope.measureVoltAverage('4'))
-    print(scope.measureVoltMin('1'))
-    print(scope.measureVoltMin('4'))
-    print(scope.measureVoltPP('1'))
-    print(scope.measureVoltPP('4'))
-    print(scope.measureVoltRMS('1'))
-    print(scope.measureVoltRMS('4'))
-
+stats = scope.measureStatistics()
+print(stats)
 print('Done')
 
 scope.close()

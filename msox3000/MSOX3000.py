@@ -31,12 +31,15 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+import time
+import numpy as np
 try:
     from . import SCPI
 except Exception:
     from SCPI import SCPI
 
-from time import sleep
+
+import time
 from datetime import datetime
 from quantiphy import Quantity
 from sys import version_info
@@ -230,7 +233,7 @@ class MSOX3000(SCPI):
         # turn on the statistics display
         self._instWrite("SYSTem:MENU MEASure")
         self._instWrite("MEASure:STATistics:DISPlay ON")
-
+        # time.sleep(1)
         # tell Results? return all values (as opposed to just one of them)
         self._instWrite("MEASure:STATistics ON")
 
@@ -1056,8 +1059,8 @@ class MSOX3000(SCPI):
     # =========================================================
     def waveform(self, filename, channel=None, points=None):
         """ Download the Waveform Data of a particular Channel and saved to the given filename as a CSV file. """
-
-        DEBUG = False
+        import time
+        DEBUG = True
         import csv
 
         # If a channel value is passed in, make it the
@@ -1080,7 +1083,7 @@ class MSOX3000(SCPI):
 
         # Download waveform data.
         # Set the waveform points mode.
-        self._instWrite("WAVeform:POINts:MODE MAX")
+        self._instWrite("WAVeform:POINts:MODE RAW")
         if DEBUG:
             qresult = self._instQuery("WAVeform:POINts:MODE?")
             print( "Waveform points mode: {}".format(qresult) )
@@ -1088,6 +1091,7 @@ class MSOX3000(SCPI):
         # Set the number of waveform points to fetch, if it was passed in
         if (points is not None):
             self._instWrite("WAVeform:POINts {}".format(points))
+            read_points = int(self._instQuery("WAVeform:POINts?"))
             if DEBUG:
                 qresult = self._instQuery("WAVeform:POINts?")
                 print( "Waveform points available: {}".format(qresult) )
@@ -1165,44 +1169,22 @@ class MSOX3000(SCPI):
         y_increment = self._instQueryNumber("WAVeform:YINCrement?")
         y_origin = self._instQueryNumber("WAVeform:YORigin?")
         y_reference = self._instQueryNumber("WAVeform:YREFerence?")
-
+        # time.sleep(1)
+        print(f"Getting waveform data")
         # Get the waveform data.
-        waveform_data = self._instQueryIEEEBlock("WAVeform:DATA?")
+        start = time.perf_counter()
+        self._inst.write("WAVeform:DATA?")  # print(stats)
 
-        if (version_info < (3,)):
-            ## If PYTHON 2, waveform_data will be a string and needs to be converted into a list of integers
-            data_bytes = [ord(x) for x in waveform_data]
-        else:
-            ## If PYTHON 3, waveform_data is already in the correct format
-            data_bytes = waveform_data
+        dat = self._inst.read_raw(499)
+        stop = time.perf_counter()
+        waveform_data = np.frombuffer(dat, dtype=np.uint8)
 
-        nLength = len(data_bytes)
-        if (DEBUG):
-            print( "Number of data values: {:d}".format(nLength) )
+        print(f"Time to get data from scope = {stop - start} seconds")
+        print(f"first 11 points: {waveform_data[:11]}")
+        waveform_data = (waveform_data[10:-1] * y_increment)
+        time = np.arange(len(waveform_data)) * x_increment
 
-        # Open file for output.
-        myFile = open(filename, 'w')
-        with myFile:
-            writer = csv.writer(myFile, dialect='excel', quoting=csv.QUOTE_NONNUMERIC)
-            if pod:
-                writer.writerow(['Time (s)'] + ['D{}'.format((pod-1) * 8 + ch) for ch in range(8)])
-            else:
-                writer.writerow(['Time (s)', 'Voltage (V)'])
-
-            # Output waveform data in CSV format.
-            for i in range(0, nLength - 1):
-                time_val = x_origin + (i * x_increment)
-                if pod:
-                    writer.writerow([time_val] + [(data_bytes[i] >> ch) & 1 for ch in range(8)])
-                else:
-                    voltage = (data_bytes[i] - y_reference) * y_increment + y_origin
-                    writer.writerow([time_val, voltage])
-
-        if (DEBUG):
-            print( "Waveform format BYTE data written to {}.".format(filename) )
-
-        # return number of entries written
-        return nLength
+        return waveform_data, time
 
     ## This is a dictionary of measurement labels with their units and
     ## method to get the data from the scope.
