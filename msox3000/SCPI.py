@@ -48,7 +48,7 @@ class SCPI(object):
     UnderRange = -9.9E+37                 # Number which indicates Under Range
     ErrorQueue = 30                       # Size of error queue
     
-    def __init__(self, resource, max_chan=1, wait=0,
+    def __init__(self, resource_info, max_chan=1, wait=0,
                      cmd_prefix = '',
                      read_strip = '',
                      read_termination = '',
@@ -64,7 +64,8 @@ class SCPI(object):
         read_termination  - optional read_termination parameter to pass to open_resource()
         write_termination - optional write_termination parameter to pass to open_resource()
         """
-        self._resource = resource
+        self._resource = resource_info[0]
+        self._rm = resource_info[1]
         self._max_chan = max_chan                # number of channels
         self._wait = wait
         self._prefix = cmd_prefix
@@ -73,21 +74,21 @@ class SCPI(object):
         self._read_termination = read_termination
         self._write_termination = write_termination
         self._timeout = timeout
-        self._version = 0.0     # set software versino to lowest value until it gets set
+        self._version = 0.0     # set software version to lowest value until it gets set
         self._inst = None
+        self.idnstr = str
 
     def open(self):
         """Open a connection to the VISA device with PYVISA-py python library"""
-        self._rm = visa.ResourceManager('@py')
+
         self._inst = self._rm.open_resource(self._resource,
                                             read_termination=self._read_termination,
                                             write_termination=self._write_termination)
         self._inst.timeout = self._timeout
-
         # Keysight recommends using clear()
         #
         # NOTE: must use pyvisa-py >= 0.5.0 to get this implementation
-        # self._inst.clear()
+        self._inst.clear()
 
         # Read software version number so can deviate operation based
         # on changes to commands over history (WHY did they make changes?)
@@ -98,6 +99,8 @@ class SCPI(object):
         # handler (error queues and such)
         self.clear()
         self._inst
+        self.idnstr = self.idn()
+
 
 
         
@@ -259,12 +262,14 @@ class SCPI(object):
     # Based on do_query_ieee_block() from the MSO-X 3000 Programming
     # Guide and modified to work within this class ...
     # =========================================================
-    def _instQueryIEEEBlock(self, queryStr):
+    def _instQueryIEEEBlock(self, queryStr, chunk_size=20480, monitoring_interface=None):
         if (queryStr[0] != '*'):
             queryStr = self._prefix + queryStr
-        #print("QUERYIEEEBlock:",queryStr)
         try:
-            result = self._inst.query_binary_values(queryStr, datatype='h', container=bytes)
+            if "visa32.dll" in self._inst.visalib.library_path:
+                result = self._inst.query_binary_values(queryStr, datatype="s", container=bytes, chunk_size=chunk_size, monitoring_interface=monitoring_interface)
+            elif "py" in self._inst.visalib.library_path:
+                result = self._inst.query_binary_values(queryStr, datatype='s', container=bytes, chunk_size=499, monitoring_interface=monitoring_interface)
         except visa.VisaIOError as err:
             # Got VISA exception so read and report any errors
             self.checkInstErrors(queryStr)

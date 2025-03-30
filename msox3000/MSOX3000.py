@@ -22,22 +22,30 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-#-------------------------------------------------------------------------------
+# -------------------------------------------------------------------------------
 #  Control of HP/Agilent/Keysight MSO-X/DSO-X 3000A Oscilloscope with PyVISA
-#-------------------------------------------------------------------------------
+# -------------------------------------------------------------------------------
 
 # For future Python3 compatibility:
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+import sys
 import time
+import warnings
+
 import numpy as np
+import quantiphy
+from numpy import dtype
+from paramiko import channel
+
+from scopemetadata import ScopeMetadata
+from tqdm import tqdm
 try:
     from . import SCPI
 except Exception:
     from SCPI import SCPI
-
 
 import time
 from datetime import datetime
@@ -45,8 +53,34 @@ from quantiphy import Quantity
 from sys import version_info
 import pyvisa as visa
 
+
 class MSOX3000(SCPI):
     """Basic class for controlling and accessing a HP/Agilent/Keysight MSO-X/DSO-X 3000A Oscilloscope"""
+
+    class WfmPreamble:
+        wav_form_dict = {
+            0: "BYTE",
+            1: "WORD",
+            4: "ASCii", }
+
+        acq_type_dict = {
+            0: "NORMal",
+            1: "PEAK",
+            2: "AVERage",
+            3: "HRESolution",
+        }
+        def __init__(self, wav_form, acq_type, wfmpts, avgcnt,x_increment, x_origin, x_reference, y_increment, y_origin, y_reference):
+            self.wav_form = wav_form
+            self.acq_type = acq_type
+            self.wfmpts = wfmpts
+            self.avgcnt = avgcnt
+            self.x_increment = x_increment
+            self.x_origin = x_origin
+            self.x_reference = x_reference
+            self.y_increment = y_increment
+            self.y_origin = y_origin
+            self.y_reference = y_reference
+
 
     maxChannel = 4
 
@@ -55,24 +89,24 @@ class MSOX3000(SCPI):
     # NOTE: Currently, only valid values are a numerical string for
     # the analog channels, POD1 for digital channels 0-7 or POD2 for
     # digital channels 8-15
-    chanAllValidList = [str(x) for x in range(1,maxChannel+1)]+['POD1','POD2']
-        
-    # Return list of valid analog channel strings.
-    chanAnaValidList = [str(x) for x in range(1,maxChannel+1)]
+    chanAllValidList = [str(x) for x in range(1, maxChannel + 1)] + ['POD1', 'POD2']
 
-    def __init__(self, resource, wait=0):
+    # Return list of valid analog channel strings.
+    chanAnaValidList = [str(x) for x in range(1, maxChannel + 1)]
+
+    def __init__(self, resource_info, wait=0):
         """Init the class with the instruments resource string
 
         resource - resource string or VISA descriptor, like TCPIP0::172.16.2.13::INSTR
         wait     - float that gives the default number of seconds to wait after sending each command
         """
-        super(MSOX3000, self).__init__(resource, max_chan=MSOX3000.maxChannel, wait=wait,
+        super(MSOX3000, self).__init__(resource_info, max_chan=MSOX3000.maxChannel, wait=wait,
                                        cmd_prefix=':',
                                        read_strip='\n',
                                        read_termination='',
                                        write_termination='\n'
-                                      )
-        
+                                       )
+
     # =========================================================
     # Based on the save oscilloscope setup example from the MSO-X 3000 Programming
     # Guide and modified to work within this class ...
@@ -87,7 +121,7 @@ class MSOX3000(SCPI):
         f.write(oscopeSetup)
         f.close()
 
-        #print('Oscilloscope Setup bytes saved: {} to "{}"'.format(len(oscopeSetup),filename))
+        # print('Oscilloscope Setup bytes saved: {} to "{}"'.format(len(oscopeSetup),filename))
 
         # Return number of bytes saved to file
         return len(oscopeSetup)
@@ -104,13 +138,12 @@ class MSOX3000(SCPI):
         oscopeSetup = f.read()
         f.close()
 
-        #print('Oscilloscope Setup bytes loaded: {} from "{}"'.format(len(oscopeSetup),filename))
+        # print('Oscilloscope Setup bytes loaded: {} from "{}"'.format(len(oscopeSetup),filename))
 
         self._instWriteIEEEBlock("SYSTem:SETup ", oscopeSetup)
 
         # Return number of bytes saved to file
         return len(oscopeSetup)
-
 
     def setupAutoscale(self, channel=None):
         """ Autoscale desired channel, which is a string. channel can also be a list of multiple strings"""
@@ -129,9 +162,9 @@ class MSOX3000(SCPI):
         # chanlist cannot have more than 5 elements
         if (len(chanlist) > 5):
             raise ValueError('Too many channels for AUTOSCALE! Max is 5. Aborting')
-            
+
         chanstr = ''
-        for chan in chanlist:                        
+        for chan in chanlist:
             # Check channel value
             if (chan not in MSOX3000.chanAllValidList):
                 raise ValueError('INVALID Channel Value for AUTOSCALE: {}  SKIPPING!'.format(chan))
@@ -155,7 +188,8 @@ class MSOX3000(SCPI):
             self.annotateColor(color)
 
         # Add an annotation to the screen
-        self._instWrite("DISPlay:ANN:BACKground {}".format(background))   # transparent background - can also be OPAQue or INVerted
+        self._instWrite(
+            "DISPlay:ANN:BACKground {}".format(background))  # transparent background - can also be OPAQue or INVerted
         self._instWrite('DISPlay:ANN:TEXT "{}"'.format(text))
         self._instWrite("DISPlay:ANN ON")
 
@@ -172,7 +206,6 @@ class MSOX3000(SCPI):
         """ Turn off screen annotation """
 
         self._instWrite("DISPlay:ANN OFF")
-
 
     def channelLabel(self, label, channel=None):
         """ Add a label to selected channel (or default one if None)
@@ -192,7 +225,7 @@ class MSOX3000(SCPI):
         # Check channel value
         if (self.channel not in MSOX3000.chanAnaValidList):
             raise ValueError('INVALID Channel Value for CHANNEL LABEL: {}  SKIPPING!'.format(self.channel))
-            
+
         self._instWrite('CHAN{}:LABel "{}"'.format(self.channel, label))
         self._instWrite('DISPlay:LABel ON')
 
@@ -200,7 +233,6 @@ class MSOX3000(SCPI):
         """ Turn off channel labels """
 
         self._instWrite('DISPlay:LABel OFF')
-
 
     def polish(self, value, measure=None):
         """ Using the QuantiPhy package, return a value that is in apparopriate Si units.
@@ -222,7 +254,6 @@ class MSOX3000(SCPI):
 
         return pol
 
-
     def measureStatistics(self):
         """Returns an array of dictionaries from the current statistics window.
 
@@ -241,18 +272,18 @@ class MSOX3000(SCPI):
         statFlat = self._instQuery("MEASure:RESults?").split(',')
 
         # convert the flat list into a two-dimentional matrix with seven columns per row
-        statMat = [statFlat[i:i+7] for i in range(0,len(statFlat),7)]
+        statMat = [statFlat[i:i + 7] for i in range(0, len(statFlat), 7)]
 
         # convert each row into a dictionary, while converting text strings into numbers
         stats = []
         for stat in statMat:
-            stats.append({'label':stat[0],
-                          'CURR':float(stat[1]),   # Current Value
-                          'MIN':float(stat[2]),    # Minimum Value
-                          'MAX':float(stat[3]),    # Maximum Value
-                          'MEAN':float(stat[4]),   # Average/Mean Value
-                          'STDD':float(stat[5]),   # Standard Deviation
-                          'COUN':int(stat[6])      # Count of measurements
+            stats.append({'label': stat[0],
+                          'CURR': float(stat[1]),  # Current Value
+                          'MIN': float(stat[2]),  # Minimum Value
+                          'MAX': float(stat[3]),  # Maximum Value
+                          'MEAN': float(stat[4]),  # Average/Mean Value
+                          'STDD': float(stat[5]),  # Standard Deviation
+                          'COUN': int(stat[6])  # Count of measurements
                           })
 
         # return the result in an array of dictionaries
@@ -282,7 +313,7 @@ class MSOX3000(SCPI):
         # Check channel value
         if (self.channel not in MSOX3000.chanAnaValidList):
             raise ValueError('INVALID Channel Value for MEASURE: {}  SKIPPING!'.format(self.channel))
-            
+
         # Next check if desired channel is the source, if not switch it
         #
         # NOTE: doing it this way so as to not possibly break the
@@ -290,10 +321,10 @@ class MSOX3000(SCPI):
         # the SOURCE command is sent even if the channel does not
         # change.
         src = self._instQuery("MEASure:SOURce?")
-        #print("Source: {}".format(src))
+        # print("Source: {}".format(src))
         if (self._chanNumber(src) != self.channel):
             # Different channel so switch it
-            #print("Switching to {}".format(self.channel))
+            # print("Switching to {}".format(self.channel))
             self._instWrite("MEASure:SOURce {}".format(self._channelStr(self.channel)))
 
         if (para):
@@ -313,7 +344,7 @@ class MSOX3000(SCPI):
 
         # wait a little before read value, if wait is not None
         if (wait):
-            sleep(wait)
+            time.sleep(wait)
 
         # query the measurement (do not have to install to query it)
         val = self._instQuery(strQu)
@@ -856,7 +887,6 @@ class MSOX3000(SCPI):
 
         return self._measure("VMAX", channel=channel, wait=wait, install=install)
 
-
     def measureVoltMin(self, channel=None, wait=0.25, install=False):
         """Measure and return the Minimum Voltage measurement.
 
@@ -875,7 +905,6 @@ class MSOX3000(SCPI):
         """
 
         return self._measure("VMIN", channel=channel, wait=wait, install=install)
-
 
     def measureVoltPP(self, channel=None, wait=0.25, install=False):
         """Measure and return the voltage peak-to-peak measurement.
@@ -904,7 +933,6 @@ class MSOX3000(SCPI):
 
         return self._measure("VPP", channel=channel, wait=wait, install=install)
 
-
     def _readDVM(self, mode, channel=None, timeout=None, wait=0.5):
         """Read the DVM data of desired channel and return the value.
 
@@ -930,7 +958,7 @@ class MSOX3000(SCPI):
         # Check channel value
         if (self.channel not in MSOX3000.chanAnaValidList):
             raise ValueError('INVALID Channel Value for DVM: {}  SKIPPING!'.format(self.channel))
-            
+
         # First check if DVM is enabled
         en = self._instQuery("DVM:ENABle?")
         if (not self._1OR0(en)):
@@ -944,10 +972,10 @@ class MSOX3000(SCPI):
         # the SOURCE command is sent even if the channel does not
         # change.
         src = self._instQuery("DVM:SOURce?")
-        #print("Source: {}".format(src))
+        # print("Source: {}".format(src))
         if (self._chanNumber(src) != self.channel):
             # Different channel value so switch it
-            #print("Switching to {}".format(self.channel))
+            # print("Switching to {}".format(self.channel))
             self._instWrite("DVM:SOURce {}".format(self._channelStr(self.channel)))
 
         # Select the desired DVM mode
@@ -955,7 +983,7 @@ class MSOX3000(SCPI):
 
         # wait a little before read value to make sure everything is switched
         if (wait):
-            sleep(wait)
+            time.sleep(wait)
 
         # Read value until get one < +9.9E+37 (per programming guide suggestion)
         startTime = datetime.now()
@@ -1037,7 +1065,6 @@ class MSOX3000(SCPI):
 
         return self._readDVM("FREQ", channel, timeout, wait)
 
-
     # =========================================================
     # Based on the screen image download example from the MSO-X 3000 Programming
     # Guide and modified to work within this class ...
@@ -1057,10 +1084,11 @@ class MSOX3000(SCPI):
     # Based on the Waveform data download example from the MSO-X 3000 Programming
     # Guide and modified to work within this class ...
     # =========================================================
-    def waveform(self, filename, channel=None, points=None):
+    def waveform(self, filename, channel=None, preamble=None):
         """ Download the Waveform Data of a particular Channel and saved to the given filename as a CSV file. """
+        global waveform_data
         import time
-        DEBUG = True
+        DEBUG = False
         import csv
 
         # If a channel value is passed in, make it the
@@ -1074,8 +1102,8 @@ class MSOX3000(SCPI):
 
         # Check channel value
         if (self.channel not in MSOX3000.chanAllValidList):
-            raise ValueError('INVALID Channel Value for WAVEFORM: {}  SKIPPING!'.format(self.channel))            
-            
+            raise ValueError('INVALID Channel Value for WAVEFORM: {}  SKIPPING!'.format(self.channel))
+
         if self.channel.upper().startswith('POD'):
             pod = int(self.channel[-1])
         else:
@@ -1083,107 +1111,62 @@ class MSOX3000(SCPI):
 
         # Download waveform data.
         # Set the waveform points mode.
-        self._instWrite("WAVeform:POINts:MODE RAW")
+        self._instWrite("WAVeform:POINts:MODE MAX")
         if DEBUG:
             qresult = self._instQuery("WAVeform:POINts:MODE?")
-            print( "Waveform points mode: {}".format(qresult) )
+            print("Waveform points mode: {}".format(qresult))
 
-        # Set the number of waveform points to fetch, if it was passed in
-        if (points is not None):
-            self._instWrite("WAVeform:POINts {}".format(points))
-            read_points = int(self._instQuery("WAVeform:POINts?"))
-            if DEBUG:
-                qresult = self._instQuery("WAVeform:POINts?")
-                print( "Waveform points available: {}".format(qresult) )
+
 
         # Set the waveform source.
-        self._instWrite("WAVeform:SOURce {}".format(self._channelStr(self.channel)))
+        self._instWrite(f"WAVeform:SOURce {self._channelStr(self.channel)}")
+
         if DEBUG:
             qresult = self._instQuery("WAVeform:SOURce?")
-            print( "Waveform source: {}".format(qresult) )
+            print("Waveform source: {}".format(qresult))
 
         # Choose the format of the data returned:
-        self._instWrite("WAVeform:FORMat BYTE")
-        if DEBUG:
-            print( "Waveform format: {}".format(self._instQuery("WAVeform:FORMat?")) )
-
-        if DEBUG:
-            # Display the waveform settings from preamble:
-            wav_form_dict = {
-                0 : "BYTE",
-                1 : "WORD",
-                4 : "ASCii", }
-
-            acq_type_dict = {
-                0 : "NORMal",
-                1 : "PEAK",
-                2 : "AVERage",
-                3 : "HRESolution",
-            }
-
-            (
-                wav_form_f,
-                acq_type_f,
-                wfmpts_f,
-                avgcnt_f,
-                x_increment,
-                x_origin,
-                x_reference_f,
-                y_increment,
-                y_origin,
-                y_reference_f
-            ) = self._instQueryNumbers("WAVeform:PREamble?")
-
-            ## convert the numbers that are meant to be integers
-            (
-                wav_form,
-                acq_type,
-                wfmpts,
-                avgcnt,
-                x_reference,
-                y_reference
-            ) = list(map(int,         (
-                wav_form_f,
-                acq_type_f,
-                wfmpts_f,
-                avgcnt_f,
-                x_reference_f,
-                y_reference_f
-            )))
+        # self._instWrite("WAVeform:FORMat WORD")
 
 
-            print( "Waveform format: {}".format(wav_form_dict[(wav_form)]) )
-            print( "Acquire type: {}".format(acq_type_dict[(acq_type)]) )
-            print( "Waveform points desired: {:d}".format((wfmpts)) )
-            print( "Waveform average count: {:d}".format((avgcnt)) )
-            print( "Waveform X increment: {:1.12f}".format(x_increment) )
-            print( "Waveform X origin: {:1.9f}".format(x_origin) )
-            print( "Waveform X reference: {:d}".format((x_reference)) ) # Always 0.
-            print( "Waveform Y increment: {:f}".format(y_increment) )
-            print( "Waveform Y origin: {:f}".format(y_origin) )
-            print( "Waveform Y reference: {:d}".format((y_reference)) ) # Always 125.
+
+        if preamble is None:
+            preamble = self.read_preamble()
+
+        if preamble.acq_type == 0: ## normal
+            self._instWrite("WAVeform:FORMat BYTE")
+            print(f"{self._instQuery("WAVeform:FORMat?")}")
+        elif preamble.acq_type == 3: ## Highres
+            self._instWrite("WAVeform:FORMat WORD")
+            print(f"{self._instQuery("WAVeform:FORMat?")}")
 
         # Get numeric values for later calculations.
-        x_increment = self._instQueryNumber("WAVeform:XINCrement?")
-        x_origin = self._instQueryNumber("WAVeform:XORigin?")
-        y_increment = self._instQueryNumber("WAVeform:YINCrement?")
-        y_origin = self._instQueryNumber("WAVeform:YORigin?")
-        y_reference = self._instQueryNumber("WAVeform:YREFerence?")
-        # time.sleep(1)
-        print(f"Getting waveform data")
+        x_reference = preamble.x_reference
+        x_increment = preamble.x_increment
+        x_origin = preamble.x_origin
+        y_increment = preamble.y_increment
+        y_origin = preamble.y_origin
+        y_reference = preamble.y_reference
+
         # Get the waveform data.
-        start = time.perf_counter()
-        self._inst.write("WAVeform:DATA?")  # print(stats)
+        print(f"acq_type: {preamble.acq_type_dict[preamble.acq_type]} {preamble.acq_type}")
+        if preamble.acq_type == 0:
+            with tqdm(desc="Downloading", unit="B", total=preamble.wfmpts) as progress_bar:
+                waveform_data = np.frombuffer((self._instQueryIEEEBlock("WAVeform:DATA?", chunk_size=102400, monitoring_interface=progress_bar)),
+                                              dtype=np.uint8)
+            print(f"Size of incoming waveform data {waveform_data.nbytes} bytes")
+        elif preamble.acq_type == 3:
+            print("getting data with h type")
+            waveform_data = np.frombuffer((self._instQueryIEEEBlock("WAVeform:DATA?", chunk_size=102400)),
+                                          dtype='>H')  ## needed for Highres mode data
 
-        dat = self._inst.read_raw(499)
-        stop = time.perf_counter()
-        waveform_data = np.frombuffer(dat, dtype=np.uint8)
+        # waveform_data = ((waveform_data * y_increment) - (y_increment * y_reference)).astype(dtype=np.float32)
+        waveform_data = (((waveform_data * y_increment) - (y_increment * y_reference))+y_origin).astype(dtype=np.float32)
 
-        print(f"Time to get data from scope = {stop - start} seconds")
-        print(f"first 11 points: {waveform_data[:11]}")
-        waveform_data = (waveform_data[10:-1] * y_increment)
-        time = np.arange(len(waveform_data)) * x_increment
+        # waveform_data = ((waveform_data))
 
+        time = (((np.arange(len(waveform_data), dtype=np.float32) - x_reference) * x_increment) + x_origin).astype(dtype=np.float32)
+        print(f"Size of processed waveform data {waveform_data.nbytes} bytes")
         return waveform_data, time
 
     ## This is a dictionary of measurement labels with their units and
@@ -1214,15 +1197,161 @@ class MSOX3000(SCPI):
         'Pk-Pk': ['V', measureVoltPP],
         'Average - Full Screen': ['V', measureVoltAverage],
         'RMS - Full Screen': ['V', measureVoltRMS],
-        }
+    }
+
+    def get_channel_bw(self, channel: int):
+        return Quantity((self._instQuery(f"CHAN{channel}:BAND?")), 'Hz')
+
+    def get_channel_bw_limit(self, channel: int):
+        """
+        Gets the state of the Bandwidth limit
+        """
+        return bool(self._instQuery(f"CHAN{channel}:BWL?"))
+
+    def get_channel_coupling(self, channel: int):
+        """
+        Gets the channel coupling, AC or DC
+        """
+        return str(self._instQuery(f"CHAN{channel}:COUP?"))
+
+    def get_channel_displayed(self, channel: int):
+        """
+        Indicates state of the channel displayed. On or off
+        """
+        return bool(int(self._instQuery(f"CHAN{channel}:DISP?")))
+
+    def get_channel_impedance(self, channel: int):
+        res = self._instQuery(f"CHAN{channel}:IMP?")
+        if res == "FIFT":
+            return Quantity(50, 'Ω')
+        elif res == "ONEM":
+            return Quantity(1000000, 'Ω')
+        else:
+            return Quantity(res, 'Ω')
+
+    def get_channel_inverted(self, channel: int) -> bool:
+        """
+        Gets the state of the channel inverted. On or off 0 or 1
+        """
+        return bool(int(self._instQuery(f"CHAN{channel}:INV?")))
+
+    def get_channel_label(self, channel: int):
+        return str(self._instQuery(f"CHAN{channel}:LAB?"))
+
+    def get_channel_offset(self, channel: int, unit=None):
+        return Quantity(str(self._instQuery(f"CHAN{channel}:OFFS?")), model=unit)
+
+    def get_channel_probe_factor(self, channel: int):
+        """
+        Gets the probe attenuation ratio in linear units.
+        """
+        return float(self._instQuery(f"CHAN{channel}:PROB?"))
+
+    def get_channel_skew(self, channel: int):
+        return Quantity(self._instQuery(f"CHAN{channel}:PROB:SKEW?"), 's')
+
+    def get_channel_range(self, channel: int, unit=None):
+        return Quantity(self._instQuery(f"CHAN{channel}:RANG?"), model=unit)
+
+    def get_channel_scale(self, channel: int, unit=None):
+        """
+        Gets the vertical units per division
+        """
+        return Quantity(self._instQuery(f"CHAN{channel}:SCAL?"), model=unit)
+
+    def get_channel_units(self, channel: int):
+        res = self._instQuery(f"CHAN{channel}:UNIT?")
+        if res == "VOLT":
+            return 'V'
+        elif res == "AMP":
+            return 'A'
+        else:
+            warnings.warn("Channel unit not parsed")
+            return ''
+
+    def get_channel_vernier(self, channel: int) -> bool:
+        """
+        Gets the state of the fine adjust vertical scales.
+        """
+        return bool(int(self._instQuery(f"CHAN{channel}:VERN?")))
+
+    def get_acquisition_mode(self):
+        res = self._instQuery("ACQ:MODE?")
+        if res == "RTIM":
+            return ScopeMetadata.AcquistiionModes.Realtime
+        elif res == "SEGM":
+            return ScopeMetadata.AcquistiionModes.Segmented
+        else:
+            warnings.warn("Acquisition mode not parsed")
+            return 0
+
+    def get_acquired_points(self):
+        return int(self._instQuery("ACQ:POIN?"))
+
+    def single_acquire(self):
+        self._instWrite("SINGle")
+
+    def read_preamble(self):
+
+        start = time.perf_counter()
+        (
+            wav_form_f,
+            acq_type_f,
+            wfmpts_f,
+            avgcnt_f,
+            x_increment,
+            x_origin,
+            x_reference_f,
+            y_increment,
+            y_origin,
+            y_reference_f
+        ) = self._instQueryNumbers("WAVeform:PREamble?")
+        print(f"Time to read preamble {time.perf_counter() - start} ")
+        ## convert the numbers that are meant to be integers
+        (
+            wav_form,
+            acq_type,
+            wfmpts,
+            avgcnt,
+            x_reference,
+            y_reference
+        ) = list(map(int, (
+            wav_form_f,
+            acq_type_f,
+            wfmpts_f,
+            avgcnt_f,
+            x_reference_f,
+            y_reference_f
+        )))
+
+        print("Waveform format: {}".format(self.WfmPreamble.wav_form_dict[(wav_form)]))
+        print("Acquire type: {}".format(self.WfmPreamble.acq_type_dict[(acq_type)]))
+        print("Waveform points desired: {:d}".format((wfmpts)))
+        print("Waveform average count: {:d}".format((avgcnt)))
+        print("Waveform X increment: {:1.12f}".format(x_increment))
+        print("Waveform X origin: {:1.9f}".format(x_origin))
+        print("Waveform X reference: {:d}".format((x_reference)))  # Always 0.
+        print("Waveform Y increment: {:f}".format(y_increment))
+        print("Waveform Y origin: {:f}".format(y_origin))
+        print("Waveform Y reference: {:d}".format((y_reference)))  # Always 125.
+        return self.WfmPreamble(wav_form, acq_type, wfmpts, avgcnt,x_increment, x_origin, x_reference, y_increment, y_origin, y_reference)
+
+    def set_waveform_points(self, points):
+        if (points is not None):
+            self._instWrite("WAVeform:POINts {}".format(points))
+            read_points = int(self._instQuery("WAVeform:POINts?"))
+
+
 
 if __name__ == '__main__':
     import argparse
+
     parser = argparse.ArgumentParser(description='Access and control a MSO-X/DSO-X 3000 Oscilloscope')
     parser.add_argument('chan', nargs='?', type=int, help='Channel to access/control (starts at 1)', default=1)
     args = parser.parse_args()
 
     from os import environ
+
     resource = environ.get('MSOX3000_IP', 'TCPIP0::172.16.2.13::INSTR')
     instr = MSOX3000(resource)
     instr.open()
@@ -1237,13 +1366,13 @@ if __name__ == '__main__':
     # Install measurements to display in statistics display and also
     # return their current values
     print('Ch. {} Settings: {:6.4e} V  PW {:6.4e} s\n'.
-              format(instr.channel, instr.measureVoltAverage(install=True),
-                         instr.measurePosPulseWidth(install=True)))
+          format(instr.channel, instr.measureVoltAverage(install=True),
+                 instr.measurePosPulseWidth(install=True)))
 
     # Add an annotation to the screen before hardcopy
     instr._instWrite("DISPlay:ANN ON")
-    instr._instWrite('DISPlay:ANN:TEXT "{}\\n{} {}"'.format('Example of Annotation','for Channel',instr.channel))
-    instr._instWrite("DISPlay:ANN:BACKground TRAN")   # transparent background - can also be OPAQue or INVerted
+    instr._instWrite('DISPlay:ANN:TEXT "{}\\n{} {}"'.format('Example of Annotation', 'for Channel', instr.channel))
+    instr._instWrite("DISPlay:ANN:BACKground TRAN")  # transparent background - can also be OPAQue or INVerted
     instr._instWrite("DISPlay:ANN:COLor CH{}".format(instr.channel))
 
     # Change label of the channel to "MySig"
@@ -1303,7 +1432,7 @@ if __name__ == '__main__':
             # appropriate method to read the measurement. Also, using
             # the same measurement name, pass it to the polish() method
             # to format the data with units and SI suffix.
-            print('{: <24} {:>12.6}'.format(meas,instr.polish(MSOX3000.measureTbl[meas][1](instr), meas)))
+            print('{: <24} {:>12.6}'.format(meas, instr.polish(MSOX3000.measureTbl[meas][1](instr), meas)))
 
     ## turn off the channel
     instr.outputOff()
